@@ -120,6 +120,14 @@ if __name__ == "__main__":
         print(f"Error: Original zip not found at {ZIP_PATH}")
     else:
         extract_zip(ZIP_PATH, TEMP_DIR)
+        
+        # Copy modified api_server.py to extracted temp folder
+        src_api_server = r"C:\v16_hunyuan2-stableprojectorz\code\api_server.py"
+        dst_api_server = os.path.join(TEMP_DIR, "code", "api_server.py")
+        if os.path.exists(src_api_server):
+            shutil.copy(src_api_server, dst_api_server)
+            print("Copied modified api_server.py to temp directory for rebranding.")
+            
         rebrand_files(TEMP_DIR)
         rename_files_and_folders(TEMP_DIR)
         rebrand_files(TEMP_DIR)

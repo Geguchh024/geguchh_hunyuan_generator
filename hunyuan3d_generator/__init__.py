@@ -85,8 +85,20 @@ def check_backend_installed(backend_path):
             
     return True
 
+# Helper to map selection keys to model path and subfolder
+def get_model_details(model_key):
+    mapping = {
+        'mini_turbo': ("tencent/Hunyuan3D-2mini", "hunyuan3d-dit-v2-mini-turbo"),
+        'mv_turbo': ("tencent/Hunyuan3D-2mv", "hunyuan3d-dit-v2-mv-turbo"),
+        'full_turbo': ("tencent/Hunyuan3D-2", "hunyuan3d-dit-v2-0-turbo"),
+        'mini_normal': ("tencent/Hunyuan3D-2mini", "hunyuan3d-dit-v2-mini"),
+        'mv_normal': ("tencent/Hunyuan3D-2mv", "hunyuan3d-dit-v2-mv"),
+    }
+    return mapping.get(model_key, ("tencent/Hunyuan3D-2mini", "hunyuan3d-dit-v2-mini-turbo"))
+
 # Helper: check if model weights are cached in Hugging Face directory
-def check_weights_installed(model_path):
+def check_weights_installed(model_key):
+    model_path, _ = get_model_details(model_key)
     model_folder = "models--" + model_path.replace("/", "--")
     
     env_cache = os.environ.get("HF_HUB_CACHE")
@@ -356,10 +368,13 @@ class GeguchhAddonProperties(bpy.types.PropertyGroup):
         name="Model",
         description="Hunyuan3D Model size to load",
         items=[
-            ('tencent/Hunyuan3D-2mini', "Hunyuan3D-2 Mini (Recommended)", "Fast generation & lower VRAM usage"),
-            ('tencent/Hunyuan3D-2', "Hunyuan3D-2 Full (Quality)", "Higher quality but slower & high VRAM usage")
+            ('mini_turbo', "Hunyuan3D-2 Mini Turbo (Fastest)", "Turbo Mini shape model (requires lowest VRAM)"),
+            ('mv_turbo', "Hunyuan3D-2 Multiview Turbo (Recommended)", "Turbo Multiview shape model (higher quality)"),
+            ('full_turbo', "Hunyuan3D-2 Full Turbo", "Turbo Full shape model (requires high VRAM)"),
+            ('mini_normal', "Hunyuan3D-2 Mini Normal", "Standard Mini shape model"),
+            ('mv_normal', "Hunyuan3D-2 Multiview Normal", "Standard Multiview shape model")
         ],
-        default='tencent/Hunyuan3D-2mini',
+        default='mini_turbo',
         update=update_status_cache
     )
     enable_tex: bpy.props.BoolProperty(
@@ -555,10 +570,13 @@ class GEGUCHH_OT_StartServer(bpy.types.Operator):
         tools_dir = os.path.join(backend_dir, "tools")
         start_bat = os.path.join(tools_dir, "run_server_silent.bat")
         
+        model_path, subfolder = get_model_details(props.model_path)
+        
         args_list = [
             f"--host 127.0.0.1",
             f"--port {props.api_port}",
-            f"--model_path {props.model_path}",
+            f"--model_path {model_path}",
+            f"--subfolder {subfolder}",
             f"--device {props.device}"
         ]
         if props.enable_tex:
