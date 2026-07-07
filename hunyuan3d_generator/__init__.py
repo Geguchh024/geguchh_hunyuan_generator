@@ -20,6 +20,7 @@ import threading
 import subprocess
 import time
 import socket
+import traceback
 
 # Global state dictionary for communication between threads and Blender's main thread
 class GlobalAddonState:
@@ -83,32 +84,26 @@ def check_backend_installed(backend_path):
 
 # Helper: check if model weights are cached in Hugging Face directory
 def check_weights_installed(model_path):
-    # Get model folder name e.g., models--tencent--Hunyuan3D-2mini
     model_folder = "models--" + model_path.replace("/", "--")
     
-    # 1. Check HF_HUB_CACHE env var
     env_cache = os.environ.get("HF_HUB_CACHE")
     if env_cache and os.path.exists(os.path.join(env_cache, model_folder)):
         return True
         
-    # 2. Check HF_HOME env var
     env_home = os.environ.get("HF_HOME")
     if env_home and os.path.exists(os.path.join(env_home, "hub", model_folder)):
         return True
         
-    # 3. Check default user cache path
     user_home = os.path.expanduser("~")
     default_path = os.path.join(user_home, ".cache", "huggingface", "hub", model_folder)
     if os.path.exists(default_path):
         return True
         
-    # 4. Fallback search (check if ANY models--tencent--Hunyuan3D-2 folder exists in default cache)
     default_hub = os.path.join(user_home, ".cache", "huggingface", "hub")
     if os.path.exists(default_hub):
         try:
             for item in os.listdir(default_hub):
                 if "hunyuan3d-2" in item.lower() or "hunyuan3d" in item.lower():
-                    # If we find a related tencent models directory, consider weights installed
                     return True
         except Exception:
             pass
@@ -136,7 +131,8 @@ def download_backend_thread(url, dest_path):
             
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             
-            chunk_size = 1024 * 64
+            # Using 1 MB chunks for faster download & fewer TCP cuts
+            chunk_size = 1024 * 1024
             with open(dest_path, 'wb') as f:
                 while True:
                     chunk = response.read(chunk_size)
@@ -148,6 +144,10 @@ def download_backend_thread(url, dest_path):
                         state.download_percent = (state.download_bytes / state.download_total) * 100.0
                     else:
                         state.download_percent = -1.0 # Unknown size
+            
+            # Verify if download was truncated
+            if state.download_total > 0 and state.download_bytes < state.download_total:
+                raise IOError(f"Connection closed early. Received {state.download_bytes} of {state.download_total} bytes.")
                         
         state.download_percent = 100.0
     except Exception as e:
@@ -169,7 +169,12 @@ def setup_backend_thread(zip_path, backend_path):
         if os.path.exists(backend_path):
             state.setup_status = "Cleaning old directory..."
             import shutil
-            shutil.rmtree(backend_path, ignore_errors=True)
+            # If files are locked, shutil.rmtree will throw. We print clear log message.
+            try:
+                shutil.rmtree(backend_path)
+            except Exception as clean_err:
+                log(f"Warning during folder cleanup: {clean_err}")
+                log("Proceeding with overwrite extraction...")
             
         os.makedirs(backend_path, exist_ok=True)
         
@@ -252,6 +257,9 @@ def setup_backend_thread(zip_path, backend_path):
     except Exception as e:
         state.setup_status = "Setup Failed!"
         log(f"ERROR: {str(e)}")
+        # Log complete traceback to help debug
+        for tb_line in traceback.format_exc().splitlines():
+            log(tb_line)
     finally:
         state.is_setting_up = False
 
@@ -764,7 +772,7 @@ class GEGUCHH_PT_HunyuanPanel(bpy.types.Panel):
                 box.label(text=f"Status: {state.setup_status}")
                 log_box = box.box()
                 log_box.label(text="Setup logs:")
-                recent_logs = state.setup_log[-2:] if state.setup_log else ["Initializing..."]
+                recent_logs = state.setup_log[-10:] if state.setup_log else ["Initializing..."]
                 for line in recent_logs:
                     log_box.label(text=line)
             else:
@@ -831,7 +839,6 @@ def register():
     bpy.types.Scene.geguchh_props = bpy.props.PointerProperty(type=GeguchhAddonProperties)
 
 def unregister():
-    # Make sure we stop server upon unloading
     if state.server_status == "RUNNING" and state.server_process:
         try:
             pid = state.server_process.pid
