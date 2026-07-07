@@ -60,11 +60,11 @@ state = GlobalAddonState()
 # Helper: check if a port is open
 def is_port_open(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(1.0)
+        s.settimeout(0.05) # 50ms is plenty for localhost connections
         try:
             s.connect(('127.0.0.1', port))
             return True
-        except (socket.timeout, ConnectionRefusedError):
+        except Exception:
             return False
 
 # Helper: check setup state for a given path
@@ -116,7 +116,6 @@ def check_weights_installed(model_path):
 # Function to update status cache safely (runs once on path edit / startup)
 def update_status_cache(self=None, context=None):
     try:
-        # Check if context scene is loaded
         if context and hasattr(context, "scene") and hasattr(context.scene, "geguchh_props"):
             props = context.scene.geguchh_props
         elif bpy.context and hasattr(bpy.context, "scene") and hasattr(bpy.context.scene, "geguchh_props"):
@@ -127,6 +126,14 @@ def update_status_cache(self=None, context=None):
         backend_dir = os.path.normpath(props.backend_path)
         state.is_installed = check_backend_installed(backend_dir)
         state.weights_cached = check_weights_installed(props.model_path)
+        
+        # Check if port is open to sync running status (e.g. if started outside or reloaded)
+        if is_port_open(props.api_port):
+            state.server_status = "RUNNING"
+        else:
+            if state.server_status == "RUNNING":
+                state.server_status = "STOPPED"
+                
         state.status_initialized = True
     except Exception as e:
         print(f"Error updating status cache: {e}")
@@ -818,7 +825,7 @@ class GEGUCHH_PT_HunyuanPanel(bpy.types.Panel):
                 box.label(text=f"Error: {state.server_error}", icon='ERROR')
                 
         # 4. Generation Form
-        if state.is_installed and (state.server_status == "RUNNING" or is_port_open(props.api_port)):
+        if state.is_installed and state.server_status == "RUNNING":
             box = layout.box()
             box.label(text="Generate 3D Model", icon='MESH_MONKEY')
             
