@@ -312,7 +312,7 @@ class GeguchhAddonProperties(bpy.types.PropertyGroup):
     download_url: bpy.props.StringProperty(
         name="Download URL",
         description="GitHub Release URL or direct download URL for Geguchh_v16_hunyuan2.zip",
-        default="https://github.com/geguchh/geguchh_v16_hunyuan2/releases/download/v1.0.0/Geguchh_v16_hunyuan2.zip"
+        default="https://github.com/Geguchh024/geguchh_hunyuan_generator/releases/download/v1.0.0/Geguchh_v16_hunyuan2.zip"
     )
     
     # Server configuration properties
