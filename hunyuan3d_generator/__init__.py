@@ -36,6 +36,11 @@ class GlobalAddonState:
     setup_status = "Not started"
     setup_log = []
     
+    # Cached statuses to avoid disk lag in Blender draw loop
+    status_initialized = False
+    is_installed = False
+    weights_cached = False
+    
     # Server state
     server_process = None
     server_status = "STOPPED" # STOPPED, STARTING, RUNNING, ERROR
@@ -66,14 +71,12 @@ def is_port_open(port):
 def check_backend_installed(backend_path):
     if not backend_path or not os.path.exists(backend_path):
         return False
-    # Check if virtual environment python exists
     venv_py = os.path.join(backend_path, "code", "venv", "Scripts", "python.exe")
     if not os.path.exists(venv_py):
         venv_py_root = os.path.join(backend_path, "venv", "Scripts", "python.exe")
         if not os.path.exists(venv_py_root):
             return False
             
-    # Check if setup completion file exists
     init_done = os.path.join(backend_path, "code", "hunyuan_init_done.txt")
     if not os.path.exists(init_done):
         server_py = os.path.join(backend_path, "code", "api_server.py")
@@ -110,6 +113,24 @@ def check_weights_installed(model_path):
             
     return False
 
+# Function to update status cache safely (runs once on path edit / startup)
+def update_status_cache(self=None, context=None):
+    try:
+        # Check if context scene is loaded
+        if context and hasattr(context, "scene") and hasattr(context.scene, "geguchh_props"):
+            props = context.scene.geguchh_props
+        elif bpy.context and hasattr(bpy.context, "scene") and hasattr(bpy.context.scene, "geguchh_props"):
+            props = bpy.context.scene.geguchh_props
+        else:
+            return
+            
+        backend_dir = os.path.normpath(props.backend_path)
+        state.is_installed = check_backend_installed(backend_dir)
+        state.weights_cached = check_weights_installed(props.model_path)
+        state.status_initialized = True
+    except Exception as e:
+        print(f"Error updating status cache: {e}")
+
 # Helper: download function run in background thread
 def download_backend_thread(url, dest_path):
     state.is_downloading = True
@@ -131,7 +152,6 @@ def download_backend_thread(url, dest_path):
             
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             
-            # Using 1 MB chunks for faster download & fewer TCP cuts
             chunk_size = 1024 * 1024
             with open(dest_path, 'wb') as f:
                 while True:
@@ -143,9 +163,8 @@ def download_backend_thread(url, dest_path):
                     if state.download_total > 0:
                         state.download_percent = (state.download_bytes / state.download_total) * 100.0
                     else:
-                        state.download_percent = -1.0 # Unknown size
+                        state.download_percent = -1.0
             
-            # Verify if download was truncated
             if state.download_total > 0 and state.download_bytes < state.download_total:
                 raise IOError(f"Connection closed early. Received {state.download_bytes} of {state.download_total} bytes.")
                         
@@ -169,7 +188,6 @@ def setup_backend_thread(zip_path, backend_path):
         if os.path.exists(backend_path):
             state.setup_status = "Cleaning old directory..."
             import shutil
-            # If files are locked, shutil.rmtree will throw. We print clear log message.
             try:
                 shutil.rmtree(backend_path)
             except Exception as clean_err:
@@ -186,7 +204,6 @@ def setup_backend_thread(zip_path, backend_path):
             
         log("Extraction complete. Setting up virtual environment...")
         
-        # Check if environment.bat is nested or in the root of the extraction
         check_path = os.path.join(backend_path, "tools", "environment.bat")
         if not os.path.exists(check_path):
             nested_folder = ""
@@ -210,7 +227,6 @@ def setup_backend_thread(zip_path, backend_path):
         tools_dir = os.path.join(backend_path, "tools")
         setup_bat = os.path.join(tools_dir, "run_installer.bat")
         
-        # Create a temporary runner batch script to execute install.py properly inside environment.bat context
         with open(setup_bat, "w") as f:
             f.write("@echo off\n")
             f.write("call environment.bat\n")
@@ -244,7 +260,6 @@ def setup_backend_thread(zip_path, backend_path):
         if process.returncode != 0:
             raise Exception(f"Setup process failed with return code {process.returncode}")
             
-        # Cleanup temporary batch file
         if os.path.exists(setup_bat):
             os.remove(setup_bat)
             
@@ -257,7 +272,6 @@ def setup_backend_thread(zip_path, backend_path):
     except Exception as e:
         state.setup_status = "Setup Failed!"
         log(f"ERROR: {str(e)}")
-        # Log complete traceback to help debug
         for tb_line in traceback.format_exc().splitlines():
             log(tb_line)
     finally:
@@ -291,7 +305,6 @@ def generate_model_thread(api_url, payload, apply_to_selected, target_mesh_name)
         state.generation_progress = 80
         state.generation_status = "Saving generated model..."
         
-        # Write to temp file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".glb")
         temp_file.write(glb_data)
         temp_file.close()
@@ -310,12 +323,13 @@ def generate_model_thread(api_url, payload, apply_to_selected, target_mesh_name)
 # Properties
 # =========================================================================
 class GeguchhAddonProperties(bpy.types.PropertyGroup):
-    # Setup Paths
+    # Setup Paths (Runs cache update callback on path change)
     backend_path: bpy.props.StringProperty(
         name="Backend Folder",
         description="Path to the folder where the backend files exist (or will be extracted to)",
         default="C:\\v16_hunyuan2-stableprojectorz",
-        subtype='DIR_PATH'
+        subtype='DIR_PATH',
+        update=update_status_cache
     )
     download_url: bpy.props.StringProperty(
         name="Download URL",
@@ -338,7 +352,8 @@ class GeguchhAddonProperties(bpy.types.PropertyGroup):
             ('tencent/Hunyuan3D-2mini', "Hunyuan3D-2 Mini (Recommended)", "Fast generation & lower VRAM usage"),
             ('tencent/Hunyuan3D-2', "Hunyuan3D-2 Full (Quality)", "Higher quality but slower & high VRAM usage")
         ],
-        default='tencent/Hunyuan3D-2mini'
+        default='tencent/Hunyuan3D-2mini',
+        update=update_status_cache
     )
     enable_tex: bpy.props.BoolProperty(
         name="Load Texturing Pipeline",
@@ -435,12 +450,15 @@ class GEGUCHH_OT_ConfigureBackend(bpy.types.Operator):
                     return {'PASS_THROUGH'}
                 else:
                     self.setup_active = False
-                    props = context.scene.geguchh_props
-                    backend_dir = os.path.normpath(props.backend_path)
+                    # Update status indicators
+                    update_status_cache(context=context)
+                    
                     if "Failed" in state.setup_status:
                         self.report({'ERROR'}, f"Setup failed. Check log details.")
                     else:
                         self.report({'INFO'}, "Backend installed and configured successfully!")
+                        props = context.scene.geguchh_props
+                        backend_dir = os.path.normpath(props.backend_path)
                         zip_path = os.path.join(backend_dir, "Geguchh_v16_hunyuan2.zip")
                         if os.path.exists(zip_path):
                             try:
@@ -518,7 +536,7 @@ class GEGUCHH_OT_StartServer(bpy.types.Operator):
             self.report({'WARNING'}, "Server is already active or starting.")
             return {'CANCELLED'}
             
-        if not check_backend_installed(backend_dir):
+        if not state.is_installed:
             self.report({'ERROR'}, "Backend not configured at specified path. Please configure it first.")
             return {'CANCELLED'}
             
@@ -733,35 +751,35 @@ class GEGUCHH_PT_HunyuanPanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         props = context.scene.geguchh_props
-        backend_dir = os.path.normpath(props.backend_path)
         
+        # Initialize status cache once on drawing if not yet set
+        if not state.status_initialized:
+            update_status_cache(context=context)
+            
         # 1. Path Configuration
         box_path = layout.box()
         box_path.label(text="Installation Path Config", icon='FILE_FOLDER')
         box_path.prop(props, "backend_path", text="Backend Dir")
         
         # 2. Installation and backend setup section
-        is_installed = check_backend_installed(backend_dir)
-        weights_cached = check_weights_installed(props.model_path)
-        
         box = layout.box()
         box.label(text="Backend Configuration Status", icon='PREFERENCES')
         
-        # 2.1 Backend check
-        if is_installed:
+        # 2.1 Backend check (reads cached state directly - no disk lag!)
+        if state.is_installed:
             box.label(text="Backend status: Configured", icon='CHECKMARK')
         else:
             box.label(text="Backend status: Not Configured", icon='ERROR')
             
-        # 2.2 Model Weights check
-        if weights_cached:
+        # 2.2 Model Weights check (reads cached state directly - no disk lag!)
+        if state.weights_cached:
             box.label(text="Model weights: Cached (Ready)", icon='CHECKMARK')
         else:
             box.label(text="Model weights: Not Detected", icon='INFO')
             box.label(text="  (Will auto-download on first run)")
             
         # If backend not configured, show install tools
-        if not is_installed:
+        if not state.is_installed:
             box.prop(props, "download_url", text="Zip URL")
             
             if state.is_downloading:
@@ -779,7 +797,7 @@ class GEGUCHH_PT_HunyuanPanel(bpy.types.Panel):
                 box.operator("geguchh.configure_backend", icon='IMPORT', text="Download & Configure Backend")
                 
         # 3. Server Controller
-        if is_installed:
+        if state.is_installed:
             box = layout.box()
             box.label(text="Backend Server Controller", icon='CONSOLE')
             
@@ -800,7 +818,7 @@ class GEGUCHH_PT_HunyuanPanel(bpy.types.Panel):
                 box.label(text=f"Error: {state.server_error}", icon='ERROR')
                 
         # 4. Generation Form
-        if is_installed and (state.server_status == "RUNNING" or is_port_open(props.api_port)):
+        if state.is_installed and (state.server_status == "RUNNING" or is_port_open(props.api_port)):
             box = layout.box()
             box.label(text="Generate 3D Model", icon='MESH_MONKEY')
             
