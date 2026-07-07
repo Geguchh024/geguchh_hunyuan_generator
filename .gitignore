@@ -1,0 +1,24 @@
+# Ignore local python virtual environments
+venv/
+venv_test/
+__pycache__/
+*.pyc
+
+# Ignore local backend files and extractions
+backend/
+frontend/
+hunyuan3d_generator/backend_extracted/
+backend_extracted/
+backend_temp/
+
+# Ignore original addon zip
+BlenderAddon/
+Geguchh_v16_hunyuan2.zip
+
+# Ignore local temporary/log files
+*.log
+*.tmp
+temp/
+setup_log.txt
+.system_generated/
+C:\Users\gegas\.gemini\antigravity\brain\
